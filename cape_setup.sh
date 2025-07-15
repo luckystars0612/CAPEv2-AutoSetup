@@ -17,7 +17,6 @@ warning() {
 }
 
 info "This automatic installation was tested on Ubuntu 24.04.2 LTS and Python 3.10.18"
-info "
 info "The architecture as the following"
 echo "┌─────────────────────────────────────┐"
 echo "│          🖥️  Platform               │"
@@ -44,11 +43,11 @@ echo "└───────────────────────�
 
 # update system
 info "Updating system...."
-sudo apt update && sudo apt upgrade
+sudo apt update
 
 # install vmware tool to allow copy-paste,...
 info "Installing vmware tools..."
-sudo apt install open-vm-tools open-vm-tools-dekstop -y
+sudo apt install open-vm-tools open-vm-tools-desktop -y
 
 # install git
 info "Installing git..."
@@ -56,14 +55,15 @@ sudo apt install git
 
 # install libvert manager and qemu kvm
 info "Installing libvert manager and qemu kvm for Sandbox..."
-sudo apt -y install bridge-utils cpu-checker libvirt-dev libvirt-clients libvirt-daemon qemu qemu-kvm
+sudo apt-get update
+sudo apt -y install bridge-utils cpu-checker libvirt-dev libvirt-clients libvirt-daemon qemu-system-x86 qemu-kvm qemu-utils
 sudo apt install virt-manager
-kvm-ok
+sudo kvm-ok
 
 # install cape
 info "Start download and install capev2 from source..."
 cd /opt
-git clone https://github.com/kevoreilly/CAPEv2.git
+sudo git clone https://github.com/kevoreilly/CAPEv2.git
 cd CAPEv2/installer
 sudo chmod +x cape2.sh
 sudo ./cape2.sh all cape | sudo tee cape.log
@@ -77,20 +77,25 @@ sudo apt update
 sudo apt install python3.10 python3.10-venv python3.10-dev -y
 
 # install pipx
-info "Installing pipx for poetry manager..."
-sudo apt update
-sudo apt install pipx
-pipx ensurepath
+# info "Installing pipx for poetry manager..."
+# sudo apt update
+# sudo apt install pipx
+# pipx ensurepath
+
 
 # install poetry
-info "Installing peotry..."
-pipx install poetry
+# info "Installing peotry..."
+# pipx install poetry
+# store full path to poetry
+
+POETRY_BIN="/etc/poetry/bin/poetry"
 
 # install dependencies for capev2
 info "Installing dependencies for cape..."
 cd /opt/CAPEv2
-poetry env use python3.10
-poetry install
+$POETRY_BIN env use python3.10
+$POETRY_BIN add sflock2@0.3.69
+$POETRY_BIN install
 
 warning "Note that after installation, all modules will run as service, consist of: cape-processor.service, cape.service, cape-rooter.service, cape-web.service"
 warning "cape-web.service is used for web browser interface"
@@ -98,10 +103,10 @@ warning "cape.service is used for configuration, it\'s needed to restart after c
 
 # Install optional dependencies
 info "Installing some optional dependencies..."
-poetry run pip install -U git+https://github.com/DissectMalware/batch_deobfuscator
-poetry run pip install -U git+https://github.com/CAPESandbox/httpreplay
-poetry run pip install git+https://github.com/wbond/oscrypto.git@1547f535001ba568b239b8797465536759c742a3
-poetry run pip install certvalidator asn1crypto mscerts
-poetry run pip install chepy
+$POETRY_BIN run pip install git+https://github.com/wbond/oscrypto.git@1547f535001ba568b239b8797465536759c742a3
+$POETRY_BIN run pip install certvalidator asn1crypto mscerts
+$POETRY_BIN run pip install -U git+https://github.com/DissectMalware/batch_deobfuscator
+$POETRY_BIN run pip install -U git+https://github.com/CAPESandbox/httpreplay
+$POETRY_BIN run pip install chepy
 
 success "Capev2 installation successfully"
