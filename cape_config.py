@@ -4,6 +4,7 @@ import os
 import shutil
 import ipaddress
 import sys
+import re
 
 def validate_ip(ip):
     try:
@@ -106,21 +107,36 @@ def update_routing_conf(file_path, resultserver_interface):
     with open(file_path, 'w') as f:
         config.write(f)
 
+def update_powershell_ip(ps_script_path, sandbox_ip, resultserver_ip):
+    with open(ps_script_path, 'r') as f:
+        content = f.read()
+    
+    # Replace SandboxIP and CapeIP with values from sandbox.conf
+    content = re.sub(r'\$sandbox_ip\s*=\s*".*?"', f'$sandbox_ip = "{sandbox_ip}"', content)
+    content = re.sub(r'\$cape_ip\s*=\s*".*?"', f'$cape_ip = "{resultserver_ip}"', content)
+    
+    with open(ps_script_path, 'w') as f:
+        f.write(content)
+
 def main():
     parser = argparse.ArgumentParser(description="Update CAPE configuration files")
+    parser.add_argument("--base-dir", required=True, help="Base directory where the predefined_configs and script exist")
     args = parser.parse_args()
-    
-    src_dir = "predefined_configs"
-    dst_dir = "/opt/CAPEv2/conf"
+
+    base_dir = args.base_dir
+    src_dir = base_dir
+    src_config_dir = os.path.join(base_dir, "predefined_configs")
+    dst_config_dir = "/opt/CAPEv2/conf"
+
     config_files = ['auxiliary.conf', 'cuckoo.conf', 'kvm.conf', 'routing.conf', 'web.conf']
-    
+
     # Ensure source directory exists
     if not os.path.isdir(src_dir):
         print(f"Error: Source directory {src_dir} does not exist")
         sys.exit(1)
     
     # Ensure destination directory exists
-    os.makedirs(dst_dir, exist_ok=True)
+    os.makedirs(dst_config_dir, exist_ok=True)
     
     # Read sandbox.conf
     sandbox_path = os.path.join(src_dir, 'sandbox.conf')
@@ -136,11 +152,11 @@ def main():
     
     # Update configuration files
     for config_file in config_files:
-        src_path = os.path.join(src_dir, config_file)
-        dst_path = os.path.join(dst_dir, config_file)
+        src_path = os.path.join(src_config_dir, config_file)
+        dst_path = os.path.join(dst_config_dir, config_file)
         
         if not os.path.isfile(src_path):
-            print(f"Warning: {config_file} not found in {src_dir}, skipping")
+            print(f"Warning: {config_file} not found in {src_config_dir}, skipping")
             continue
         
         try:
@@ -163,11 +179,20 @@ def main():
             
             # Copy file to destination
             shutil.copy2(src_path, dst_path)
-            print(f"Updated and copied {config_file} to {dst_dir}")
+            print(f"Updated and copied {config_file} to {dst_path}")
         
         except Exception as e:
             print(f"Error processing {config_file}: {e}")
             sys.exit(1)
+    
+    # Update PowerShell script with IPs from sandbox.conf
+    ps_script_path = os.path.join(src_dir,"sandbox_config.ps1")
+    if os.path.isfile(ps_script_path):
+        update_powershell_ip(ps_script_path, sandbox_config['sandbox_ip'], sandbox_config['resultserver_ip'])
+        print(f"Updated {ps_script_path} with SandboxIP={sandbox_config['sandbox_ip']} and CapeIP={sandbox_config['resultserver_ip']}")
+    else:
+        print(f"Error: {ps_script_path} not found")
+        sys.exit(1)
 
 if __name__ == "__main__":
     main()

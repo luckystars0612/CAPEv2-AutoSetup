@@ -60,6 +60,9 @@ sudo apt -y install bridge-utils cpu-checker libvirt-dev libvirt-clients libvirt
 sudo apt install virt-manager
 sudo kvm-ok
 
+# setup base script directory
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 # install cape
 info "Start download and install capev2 from source..."
 cd /opt
@@ -112,9 +115,22 @@ $POETRY_BIN run pip install python-magic
 
 success "Capev2 installation successfully"
 
-info "Copy default config to conf/ directory"
+# copy default config to conf/ and modify based on sandbox.conf
+warning "You need to modify some param in sandbox.conf to setup config automatically"
+info "Copy default config to conf"
+cd /opt/CAPEv2
 sudo chmod +x conf/copy_configs.sh
 sudo conf/copy_configs.sh
+sudo python3 "$SCRIPT_DIR/cape_config.py" --base-dir "$SCRIPT_DIR"
 
-warning "You need to modify some param in sandbox.conf to setup config automatically"
-sudo python3 cape_config.py
+# Retart cape service after change default config
+info "Restart cape.service..."
+sudo systemctl restart cape.service
+sudo systemctl restart cape-processor.service
+sudo systemctl restart cape-web.service
+sudo systemctl restart cape-rooter.service
+
+#end setup
+success "All cape services restarted"
+success "You need to create new VM by virt-manager, then copy sandbox_config.ps1 and run on sandbox to set up config and agent for capev2"
+success "Installation and configuration are all set"

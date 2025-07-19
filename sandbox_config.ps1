@@ -10,8 +10,8 @@ $logFile = "C:\SandboxSetup.log"
 Start-Transcript -Path $logFile -Append
 
 # set static IP
-$sandbox_ip = "192.168.122.50"
-$cape_ip = "192.168.122.1"
+$sandbox_ip = "x.x.x.x"
+$cape_ip = "x.x.x.x"
 
 try {
     $adapter = Get-NetAdapter | Where-Object { $_.Name -eq "Ethernet Instance 0" }
