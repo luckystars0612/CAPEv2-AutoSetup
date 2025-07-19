@@ -1,157 +1,227 @@
-# Disable Teredo
-netsh interface teredo set state disabled
+# Check for admin privileges
+$isAdmin = ([Security.Principal.WindowsPrincipal] [Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
+if (-not $isAdmin) {
+    Write-Error "This script requires administrative privileges. Please run as Administrator."
+    exit 1
+}
 
-# Disable LLMNR via registry
+# Start logging
+$logFile = "C:\SandboxSetup.log"
+Start-Transcript -Path $logFile -Append
+
+# set static IP
+$sandbox_ip = "192.168.122.50"
+$cape_ip = "192.168.122.1"
+
+try {
+    $adapter = Get-NetAdapter | Where-Object { $_.Name -eq "Ethernet Instance 0" }
+    if ($adapter) {
+        $ipAddress = [System.Net.IPAddress]::Parse($sandbox_ip)
+        $gateway = [System.Net.IPAddress]::Parse($cape_ip)
+        $subnet = "255.255.255.0"
+
+        # Remove existing IP configuration
+        Remove-NetIPAddress -InterfaceAlias $adapter.Name -Confirm:$false -ErrorAction Stop
+        Remove-NetRoute -InterfaceAlias $adapter.Name -Confirm:$false -ErrorAction Stop
+
+        # Set static IP, subnet, and gateway
+        New-NetIPAddress -InterfaceAlias $adapter.Name -IPAddress $sandbox_ip -PrefixLength 24 -DefaultGateway $cape_ip -ErrorAction Stop
+        Set-DnsClientServerAddress -InterfaceAlias $adapter.Name -ServerAddresses ("8.8.8.8", "8.8.4.4") -ErrorAction Stop
+
+        Write-Host "Static IP $sandbox_ip set with gateway $cape_ip for adapter $($adapter.Name)."
+    } else {
+        Write-Error "No network adapter named 'Ethernet' found."
+    }
+} catch {
+    Write-Error "Failed to set static IP: $_"
+}
+
+# Disable Teredo
+try {
+    netsh interface teredo set state disabled
+    Write-Host "Teredo has been disabled."
+} catch {
+    Write-Error "Failed to disable Teredo: $_"
+}
+
+# Disable LLMNR
 $regPath = "HKLM:\Software\Policies\Microsoft\Windows NT\DNSClient"
 $name = "EnableMulticast"
 $value = 0
 
-# Create key if it doesn't exist
-if (-not (Test-Path $regPath)) {
-    New-Item -Path $regPath -Force | Out-Null
+try {
+    if (-not (Test-Path $regPath)) {
+        New-Item -Path $regPath -Force | Out-Null
+    }
+    New-ItemProperty -Path $regPath -Name $name -Value $value -PropertyType DWORD -Force | Out-Null
+    Write-Host "LLMNR has been disabled."
+} catch {
+    Write-Error "Failed to disable LLMNR: $_"
 }
 
-# Set the registry value to disable LLMNR
-New-ItemProperty -Path $regPath -Name $name -Value $value -PropertyType DWORD -Force
-
-Write-Host "LLMNR has been disabled. A reboot or gpupdate /force may be required."
-
-# Enable "Restrict Internet communication"
-#$regPath = "HKLM:\Software\Policies\Microsoft\Windows\System"
-#$name = "EnableRestrictedInternet"
-#$value = 1
-
-# Create the key if it doesn't exist
-#if (-not (Test-Path $regPath)) {
-    New-Item -Path $regPath -Force | Out-Null
-#}
-
-# Set the registry value
-#New-ItemProperty -Path $regPath -Name $name -Value $value -PropertyType DWORD -Force
-
-#Write-Host '"Restrict Internet communication" has been enabled. A reboot or gpupdate /force may be required.'
-
-# Disable Microsoft Defender Antivirus
+# Disable Windows Defender and Related Features
 $regPath = "HKLM:\Software\Policies\Microsoft\Windows Defender"
-$name = "DisableAntiSpyware"
-$value = 1
-
-# Create the key if it doesn't exist
-if (-not (Test-Path $regPath)) {
-    New-Item -Path $regPath -Force | Out-Null
+$realTimePath = "$regPath\Real-Time Protection"
+$mpPreferenceSettings = @{
+    DisableRealtimeMonitoring = $true
+    DisableBehaviorMonitoring = $true
 }
 
-# Set the registry value
-New-ItemProperty -Path $regPath -Name $name -Value $value -PropertyType DWORD -Force
+try {
+    if (-not (Test-Path $regPath)) {
+        New-Item -Path $regPath -Force | Out-Null
+    }
+    if (-not (Test-Path $realTimePath)) {
+        New-Item -Path $realTimePath -Force | Out-Null
+    }
+    New-ItemProperty -Path $regPath -Name "DisableAntiSpyware" -Value 1 -PropertyType DWORD -Force | Out-Null
+    New-ItemProperty -Path $regPath -Name "AllowFastServiceStartup" -Value 0 -PropertyType DWORD -Force | Out-Null
+    New-ItemProperty -Path $realTimePath -Name "DisableRealtimeMonitoring" -Value 1 -PropertyType DWORD -Force | Out-Null
 
-Write-Host "Microsoft Defender Antivirus has been disabled via registry. A reboot may be required."
-
-# Disable Microsoft Defender Real-time Protection
-$regPath = "HKLM:\Software\Policies\Microsoft\Windows Defender\Real-Time Protection"
-$name = "DisableRealtimeMonitoring"
-$value = 1
-
-# Create the key if it doesn't exist
-if (-not (Test-Path $regPath)) {
-    New-Item -Path $regPath -Force | Out-Null
+    foreach ($key in $mpPreferenceSettings.Keys) {
+        try {
+            Set-MpPreference -Name $key -Value $mpPreferenceSettings[$key] -ErrorAction Stop
+        } catch {
+            Write-Warning "Skipping unsupported parameter '$key': $_"
+        }
+    }
+    Write-Host "Windows Defender and related protections have been disabled."
+} catch {
+    Write-Error "Failed to disable Windows Defender: $_"
+    # Fallback: Stop Defender service if registry method fails
+    try {
+        Stop-Service -Name WinDefend -Force -ErrorAction Stop
+        Write-Host "Windows Defender service stopped as a fallback."
+    } catch {
+        Write-Warning "Could not stop Windows Defender service: $_"
+    }
 }
 
-# Set the registry value
-New-ItemProperty -Path $regPath -Name $name -Value $value -PropertyType DWORD -Force
+# Disable Firewall
+try {
+    Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled False -ErrorAction Stop
+    Write-Host "Firewall has been disabled for all profiles."
+} catch {
+    Write-Error "Failed to disable firewall: $_"
+}
 
-Write-Host "Real-time protection has been disabled. A reboot or gpupdate /force may be required."
-
-# Disable Microsoft Store using registry (GPO equivalent)
+# Disable Microsoft Store
 $regPath = "HKLM:\Software\Policies\Microsoft\WindowsStore"
 $name = "RemoveWindowsStore"
 $value = 1
 
-# Create the key if it doesn't exist
-if (-not (Test-Path $regPath)) {
-    New-Item -Path $regPath -Force | Out-Null
+try {
+    if (-not (Test-Path $regPath)) {
+        New-Item -Path $regPath -Force | Out-Null
+    }
+    New-ItemProperty -Path $regPath -Name $name -Value $value -PropertyType DWORD -Force | Out-Null
+    Write-Host "Microsoft Store has been disabled."
+} catch {
+    Write-Error "Failed to disable Microsoft Store: $_"
 }
 
-# Set the value to disable Microsoft Store
-New-ItemProperty -Path $regPath -Name $name -Value $value -PropertyType DWORD -Force
+# Download and Install Sysmon
+try {
+    $sysmonUrl = "https://download.sysinternals.com/files/Sysmon.zip"
+    $sysmonZip = "$env:TEMP\Sysmon.zip"
+    $sysmonDir = "$env:TEMP\Sysmon"
+    $sysmonConfigUrl = "https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-config/master/sysmonconfig-export.xml"
+    $sysmonConfig = "$sysmonDir\sysmonconfig.xml"
+    $sysmonExe = if ([System.Environment]::Is64BitOperatingSystem) { "Sysmon64.exe" } else { "Sysmon.exe" }
 
-Write-Host "Microsoft Store has been disabled. Reboot or run 'gpupdate /force' to apply."
+    Write-Host "Downloading Sysmon..."
+    Invoke-WebRequest -Uri $sysmonUrl -OutFile $sysmonZip -ErrorAction Stop
+    Expand-Archive -Path $sysmonZip -DestinationPath $sysmonDir -Force -ErrorAction Stop
 
-# disable ransomware protection
-Set-MpPreference -EnableControlledFolderAccess Disabled
+    Write-Host "Downloading Sysmon configuration..."
+    Invoke-WebRequest -Uri $sysmonConfigUrl -OutFile $sysmonConfig -ErrorAction Stop
 
-Write-Host "Ransomware protection (Controlled Folder Access) has been disabled."
+    Write-Host "Installing Sysmon with configuration..."
+    Start-Process -FilePath "$sysmonDir\$sysmonExe" -ArgumentList "-accepteula -i `"$sysmonConfig`"" -Verb RunAs -Wait -ErrorAction Stop
 
-# disable network firewall
-Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled False
+    Write-Host "Sysmon installed successfully."
+} catch {
+    Write-Error "Failed to install Sysmon: $_"
+}
 
-Write-Host "Firewall has been disabled for Domain, Private, and Public profiles."
+# Install Python 3.10.11 (32-bit)
+$pythonInstallerUrl = "https://www.python.org/ftp/python/3.10.11/python-3.10.11.exe"
+$installerPath = "$env:TEMP\python-3.10.11.exe"
+$pythonPath = "C:\Python\python.exe"
+$pipPath = "C:\Python\Scripts\pip.exe"
 
-# Download Sysmon ZIP
-Invoke-WebRequest -Uri "https://download.sysinternals.com/files/Sysmon.zip" -OutFile "Sysmon.zip"
+try {
+    Write-Host "Downloading Python 3.10.11 (32-bit)..."
+    Invoke-WebRequest -Uri $pythonInstallerUrl -OutFile $installerPath -ErrorAction Stop
 
-# Extract Sysmon.zip
-Expand-Archive -Path "Sysmon.zip" -DestinationPath ".\Sysmon" -Force
+    Write-Host "Installing Python for all users..."
+    Start-Process -FilePath $installerPath -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 TargetDir=C:\Python" -Wait -ErrorAction Stop
 
-# Download sysmon config
-Invoke-WebRequest -Uri "https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-config/master/sysmonconfig-export.xml" -OutFile ".\sysmonconfig.xml"
+    if (Test-Path $pythonPath) {
+        $pythonVersion = & $pythonPath --version
+        Write-Host "✅ Python installed successfully: $pythonVersion"
+    } else {
+        Write-Error "❌ Python installation failed. $pythonPath not found."
+        exit 1
+    }
 
-# Use Sysmon64 if on 64-bit system
-Start-Process -FilePath ".\Sysmon\Sysmon64.exe" -ArgumentList "-accepteula -i sysmonconfig.xml" -Verb RunAs -Wait
-
-Write-Host "Sysmon installed with SwiftOnSecurity configuration."
-
-# ----------------------------
-# Step 1: Download and install Python 3.10.x (32-bit)
-# ----------------------------
-$pythonInstaller = "$env:TEMP\python-3.10.11.exe"
-$pythonUrl = "https://www.python.org/ftp/python/3.10.11/python-3.10.11.exe"
-
-Write-Host "Downloading Python 3.10.11 (32-bit)..."
-Invoke-WebRequest -Uri $pythonUrl -OutFile $pythonInstaller
-
-Write-Host "Installing Python for all users..."
-Start-Process -FilePath $pythonInstaller -ArgumentList `
-    "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1" -Wait
-
-# Check if python.exe is now available
-$pythonPath = (Get-Command python.exe -ErrorAction SilentlyContinue)?.Source
-if (-not $pythonPath) {
-    Write-Error "❌ Python installation failed or not in PATH."
+    Remove-Item $installerPath -Force -ErrorAction SilentlyContinue
+} catch {
+    Write-Error "Failed to install Python: $_"
     exit 1
 }
 
-# ----------------------------
-# Step 2: Download the CAPE agent
-# ----------------------------
+# Install Pillow
+try {
+    Write-Host "Installing Pillow..."
+    & $pipPath install Pillow
+
+    $pillowCheck = & $pipPath show Pillow
+    if ($pillowCheck) {
+        $pillowVersion = ($pillowCheck | Where-Object { $_ -match "Version:" }) -replace "Version: ", ""
+        Write-Host "✅ Pillow installed successfully: $pillowVersion"
+    } else {
+        Write-Error "❌ Pillow installation failed."
+    }
+} catch {
+    Write-Error "Failed to install Pillow: $_"
+}
+
+# Download CAPE Agent
 $agentUrl = "https://raw.githubusercontent.com/kevoreilly/CAPEv2/master/agent/agent.py"
 $agentDest = "C:\cape_agent.pyw"
 
-Write-Host "Downloading CAPE agent..."
-Invoke-WebRequest -Uri $agentUrl -OutFile $agentDest
+try {
+    Write-Host "Downloading CAPE agent..."
+    Invoke-WebRequest -Uri $agentUrl -OutFile $agentDest -ErrorAction Stop
 
-# ----------------------------
-# Step 3: Create Scheduled Task to Run Agent Silently at Logon
-# ----------------------------
-$taskName = "CAPE_Agent"
-$action = New-ScheduledTaskAction -Execute "pythonw.exe" -Argument "`"$agentDest`""
-$trigger = New-ScheduledTaskTrigger -AtLogOn
-$principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
-$task = New-ScheduledTask -Action $action -Principal $principal -Trigger $trigger
+    if (-not (Test-Path $agentDest)) {
+        Write-Error "❌ CAPE agent download failed. $agentDest not found."
+        exit 1
+    }
 
-Write-Host "Registering scheduled task '$taskName'..."
-Register-ScheduledTask -TaskName $taskName -InputObject $task -Force
+    # Create Scheduled Task
+    $taskName = "CAPE_Agent"
+    $action = New-ScheduledTaskAction -Execute "pythonw.exe" -Argument "`"$agentDest`""
+    $trigger = New-ScheduledTaskTrigger -AtLogOn
+    $principal = New-ScheduledTaskPrincipal -UserId "SYSTEM" -RunLevel Highest
+    $task = New-ScheduledTask -Action $action -Principal $principal -Trigger $trigger
 
-Write-Host "`n✅ CAPE agent is now configured to run silently at logon with highest privileges."
+    Write-Host "Registering scheduled task '$taskName'..."
+    Register-ScheduledTask -TaskName $taskName -InputObject $task -Force -ErrorAction Stop
 
-
-# Install Pillow via pip
-Write-Host "Installing Pillow (Python imaging library)..."
-pip install Pillow
-
-# Optional: Verify install
-if (pip show Pillow) {
-    Write-Host "`n✅ Pillow installed successfully. CAPE can now take screenshots in the guest."
-} else {
-    Write-Error "❌ Pillow installation failed. Please check Python installation and pip."
+    Write-Host "✅ CAPE agent configured to run at logon with highest privileges."
+} catch {
+    Write-Error "Failed to configure CAPE agent: $_"
 }
 
+# Prompt for restart
+Write-Host "A system restart is required to apply changes. Restart now? (Y/N)"
+$response = Read-Host
+if ($response -eq 'Y' -or $response -eq 'y') {
+    Restart-Computer -Force
+} else {
+    Write-Host "Please restart the system manually to apply changes."
+}
+
+Stop-Transcript

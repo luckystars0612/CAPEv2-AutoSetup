@@ -43,8 +43,7 @@ echo "└───────────────────────�
 
 # update system
 info "Updating system...."
-sudo apt-get update
-sudo apt-get upgrade
+sudo apt update
 
 # install vmware tool to allow copy-paste,...
 info "Installing vmware tools..."
@@ -111,5 +110,11 @@ $POETRY_BIN run pip install -U git+https://github.com/CAPESandbox/httpreplay
 $POETRY_BIN run pip install chepy
 $POETRY_BIN run pip install python-magic
 
-
 success "Capev2 installation successfully"
+
+info "Copy default config to conf/ directory"
+sudo chmod +x conf/copy_configs.sh
+sudo conf/copy_configs.sh
+
+warning "You need to modify some param in sandbox.conf to setup config automatically"
+sudo python3 cape_config.py

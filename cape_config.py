@@ -108,8 +108,6 @@ def update_routing_conf(file_path, resultserver_interface):
 
 def main():
     parser = argparse.ArgumentParser(description="Update CAPE configuration files")
-    parser.add_argument('-i', '--interface', help="Interface name (overridden by sandbox.conf)")
-    parser.add_argument('-l', '--listen-ip', help="Listen IP (overridden by sandbox.conf)")
     args = parser.parse_args()
     
     src_dir = "predefined_configs"
