@@ -112,6 +112,8 @@ $POETRY_BIN run pip install -U git+https://github.com/DissectMalware/batch_deobf
 $POETRY_BIN run pip install -U git+https://github.com/CAPESandbox/httpreplay
 $POETRY_BIN run pip install chepy
 $POETRY_BIN run pip install python-magic
+$POETRY_BIN run pip install libvirt-python
+$POETRY_BIN run pip install -U flare-floss
 
 success "Capev2 installation successfully"
 
@@ -123,8 +125,12 @@ sudo chmod +x conf/copy_configs.sh
 sudo conf/copy_configs.sh
 sudo python3 "$SCRIPT_DIR/cape_config.py" --base-dir "$SCRIPT_DIR"
 
+# add cape user to libvert group
+sudo usermod -aG libvirt cape
+newgrp libvirt
+
 # Retart cape service after change default config
-info "Restart cape.service..."
+info "Restart all cape services..."
 sudo systemctl restart cape.service
 sudo systemctl restart cape-processor.service
 sudo systemctl restart cape-web.service

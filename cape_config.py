@@ -128,7 +128,7 @@ def main():
     src_config_dir = os.path.join(base_dir, "predefined_configs")
     dst_config_dir = "/opt/CAPEv2/conf"
 
-    config_files = ['auxiliary.conf', 'cuckoo.conf', 'kvm.conf', 'routing.conf', 'web.conf']
+    config_files = ['auxiliary.conf', 'cuckoo.conf', 'kvm.conf', 'reporting.conf', 'routing.conf', 'web.conf']
 
     # Ensure source directory exists
     if not os.path.isdir(src_dir):
