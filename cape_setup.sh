@@ -126,8 +126,9 @@ sudo conf/copy_configs.sh
 sudo python3 "$SCRIPT_DIR/cape_config.py" --base-dir "$SCRIPT_DIR"
 
 # add cape user to libvert group
-sudo usermod -aG libvirt cape
+sudo usermod -aG libvirt,kvm cape
 newgrp libvirt
+newgrp kvm
 
 # Retart cape service after change default config
 info "Restart all cape services..."

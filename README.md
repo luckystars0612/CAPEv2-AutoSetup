@@ -30,3 +30,6 @@ Set-ExecutionPolicy -ExecutionPolicy Unrestricted -Scope LocalMachine
 ```
 ***Note: the static IP of this sandbox VM is defined by `sandbox_ip` in `sandbox.conf`***
 > These script doesn't install any additional runtime like .NET or Java runtime to mimic a real environment, then you can install it (I will update it later)
+
+**REMEMBER TO ENABLE NESTED VIRTUALIZATION IN VMWARE WORKSTATION**
+**you can refer to my [Nested VMware settings](https://github.com/luckystars0612/Setting-Guide/blob/main/Nested_Virtualization_WSL_Setup_Vmware.md)**
