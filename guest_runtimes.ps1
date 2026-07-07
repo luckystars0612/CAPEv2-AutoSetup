@@ -1,10 +1,10 @@
 <#
-guest_runtimes.ps1 — Install common Windows runtimes and apps on the CAPE
+guest_runtimes.ps1 - Install common Windows runtimes and apps on the CAPE
 sandbox VM to mimic a normal user workstation.
 
 Sections are independent: if one install fails the rest still run.
 
-Order of installs (heavy → light):
+Order of installs (heavy -> light):
   1. .NET Framework 4.8              (modifies OS, reboot needed)
   2. .NET Desktop + Runtime          (x86 + x64, single LTS version)
   3. Visual C++ 2015-2022            (x86 + x64, critical for native PE)
@@ -23,15 +23,15 @@ Run AFTER sandbox_config.ps1, BEFORE taking the snapshot:
 #>
 
 # =============================================================================
-# Config — flip any of these to $false to skip a whole section
+# Config - flip any of these to $false to skip a whole section
 # =============================================================================
 $Config = @{
     InstallDotNetFx   = $true    # .NET Framework 4.8 (offline installer)
     InstallDotNet     = $true    # .NET Desktop + Runtime (x86 + x64). Single LTS version.
     InstallVC         = $true    # VC++ 2015-2022 Redistributable (x86 + x64)
-    InstallJava       = $true    # Java JRE — single LTS version (Adoptium Temurin)
+    InstallJava       = $true    # Java JRE - single LTS version (Adoptium Temurin)
     InstallNodeJS     = $true    # Node.js LTS (winget)
-    InstallWPS        = $true    # WPS Office — for inspecting .doc/.xls/.ppt files
+    InstallWPS        = $true    # WPS Office - for inspecting .doc/.xls/.ppt files
     InstallApps       = $true    # 7-Zip, Notepad++, VLC, SumatraPDF
     InstallBrowsers   = $true    # Chrome, Firefox
 
@@ -62,7 +62,7 @@ $Script:Failed    = @()
 function Write-Step {
     param([string]$Title)
     Write-Host ""
-    Write-Host "═══ $Title ═══" -ForegroundColor Cyan
+    Write-Host "=== $Title ===" -ForegroundColor Cyan
 }
 
 function Mark-OK {
@@ -72,7 +72,7 @@ function Mark-OK {
 }
 function Mark-Fail {
     param($Name, $Err = "")
-    if ($Err) { $line = "$Name — $Err" } else { $line = $Name }
+    if ($Err) { $line = "$Name - $Err" } else { $line = $Name }
     $Script:Failed += $line
     Write-Host "  [FAIL] $line" -ForegroundColor Red
 }
@@ -90,7 +90,7 @@ function Get-Installer {
     New-Item -ItemType Directory -Force -Path $Config.TempDir | Out-Null
     $local = Join-Path $Config.TempDir $LocalName
     if (Test-Path $local) {
-        Write-Host "  cached → $local"
+        Write-Host "  cached -> $local"
         return $local
     }
     try {
@@ -104,7 +104,7 @@ function Get-Installer {
 }
 
 # Run an EXE installer silently. Some installers return 3010 = "reboot
-# required" — treat that as success.
+# required" - treat that as success.
 function Invoke-SilentInstall {
     param(
         [Parameter(Mandatory)][string]$ExePath,
@@ -129,7 +129,8 @@ function Install-Winget {
     try {
         # Skip if already present.
         $existing = winget list --id $Id --accept-source-agreements 2>$null
-        if ($LASTEXITCODE -eq 0 -and ($existing -split "`n") -match "^$Id\s") {
+        $idPattern = "^" + [regex]::Escape($Id) + "\s"
+        if ($LASTEXITCODE -eq 0 -and ($existing -split "`n") -match $idPattern) {
             Mark-OK "$Name (already installed)"
             return
         }
@@ -166,7 +167,7 @@ if ($Config.InstallDotNetFx) {
 }
 
 # =============================================================================
-# 2. .NET Desktop + Runtime (x86 + x64) — single LTS version
+# 2. .NET Desktop + Runtime (x86 + x64) - single LTS version
 # =============================================================================
 if ($Config.InstallDotNet) {
     $v = $Config.DotNetVersion
@@ -179,7 +180,7 @@ if ($Config.InstallDotNet) {
     )
     foreach ($j in $jobs) {
         try {
-            $exe = Get-Installer -Url $j.Url -LocalName ($j.Name -replace '[\s\.]','_') + ".exe"
+            $exe = Get-Installer -Url $j.Url -LocalName (($j.Name -replace '[\s\.]','_') + ".exe")
             if (-not $exe) { continue }
             Invoke-SilentInstall -ExePath $exe | Out-Null
             Mark-OK $j.Name
@@ -212,7 +213,7 @@ if ($Config.InstallVC) {
 }
 
 # =============================================================================
-# 4. Java JRE (Adoptium Temurin) — single LTS version
+# 4. Java JRE (Adoptium Temurin) - single LTS version
 # =============================================================================
 if ($Config.InstallJava) {
     $major = $Config.JavaVersion
@@ -245,7 +246,7 @@ if ($Config.InstallNodeJS) {
 }
 
 # =============================================================================
-# 6. WPS Office (free) — for inspecting .doc/.docx/.xls/.xlsx/.ppt/.pptx
+# 6. WPS Office (free) - for inspecting .doc/.docx/.xls/.xlsx/.ppt/.pptx
 # =============================================================================
 if ($Config.InstallWPS) {
     Write-Step "6/8  WPS Office (free international)"
@@ -267,7 +268,9 @@ if ($Config.InstallWPS) {
                 -Wait -PassThru -ErrorAction Stop
             if ($proc.ExitCode -eq 0) { Mark-OK "WPS Office"; $wpsInstalled = $true }
         }
-    } catch { }
+    } catch {
+        Write-Host "  winget attempt for WPS Office failed: $_" -ForegroundColor Yellow
+    }
 
     # Attempt 2: direct MSI/EXE download if winget failed.
     if (-not $wpsInstalled) {
@@ -285,7 +288,7 @@ if ($Config.InstallWPS) {
             }
         } catch {
             $msg = if ($_.Exception) { $_.Exception.Message } else { "$_" }
-            Mark-Fail "WPS Office" "$msg — try 'winget install WPS.Office' manually"
+            Mark-Fail "WPS Office" "$msg - try 'winget install WPS.Office' manually"
         }
     }
 }
@@ -315,11 +318,11 @@ if ($Config.InstallBrowsers) {
 # =============================================================================
 Write-Step "Summary"
 Write-Host ("Installed: {0}" -f $Script:Installed.Count) -ForegroundColor Green
-$Script:Installed | ForEach-Object { Write-Host "  ✓ $_" -ForegroundColor Green }
+$Script:Installed | ForEach-Object { Write-Host "  [OK] $_" -ForegroundColor Green }
 if ($Script:Failed.Count -gt 0) {
     Write-Host ""
     Write-Host ("Failed:    {0}" -f $Script:Failed.Count) -ForegroundColor Red
-    $Script:Failed | ForEach-Object { Write-Host "  ✗ $_" -ForegroundColor Red }
+    $Script:Failed | ForEach-Object { Write-Host "  [FAIL] $_" -ForegroundColor Red }
     Write-Host ""
     Write-Host "Check the log for details: $($Config.LogFile)" -ForegroundColor Yellow
 }

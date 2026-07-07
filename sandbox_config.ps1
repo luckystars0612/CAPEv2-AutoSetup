@@ -1,4 +1,4 @@
-# sandbox_config.ps1 — Configure a Windows VM as a CAPEv2 sandbox guest.
+# sandbox_config.ps1 - Configure a Windows VM as a CAPEv2 sandbox guest.
 #
 # What this script does:
 #   1. Sets a static IP on the first non-virtual, "Up" adapter.
@@ -35,13 +35,13 @@ try {
 }
 
 # --- IPs patched by cape_config.py ------------------------------------------
-$sandbox_ip = "x.x.x.x"   # patched from sandbox.conf:sandbox_ip
-$cape_ip    = "x.x.x.x"   # patched from sandbox.conf:resultserver_ip
+$sandbox_ip = " 192.168.122.50"   # patched from sandbox.conf:sandbox_ip
+$cape_ip    = " 192.168.122.1"   # patched from sandbox.conf:resultserver_ip
 
 # --- helper ------------------------------------------------------------------
 function Test-IpPatched {
     param([string]$Value, [string]$Name)
-    if ($Value -eq "x.x.x.x" -or [string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -eq " 192.168.122.50" -or [string]::IsNullOrWhiteSpace($Value)) {
         Write-Error "$Name was not patched from sandbox.conf (still '$Value'). Re-run cape_config.py."
         exit 1
     }
@@ -89,7 +89,7 @@ try {
     Set-DnsClientServerAddress -InterfaceAlias $adapter.Name `
         -ServerAddresses ("8.8.8.8", "8.8.4.4") -ErrorAction Stop
 
-    Write-Host "✔️ Static IP $sandbox_ip set with gateway $cape_ip."
+    Write-Host "[OK] Static IP $sandbox_ip set with gateway $cape_ip."
 } catch {
     Write-Error "Failed to set static IP: $_"
     exit 1
@@ -98,7 +98,7 @@ try {
 # --- Disable Teredo ----------------------------------------------------------
 try {
     netsh interface teredo set state disabled | Out-Null
-    Write-Host "✔️ Teredo disabled."
+    Write-Host "[OK] Teredo disabled."
 } catch { Write-Warning "Teredo disable failed: $_" }
 
 # --- Disable LLMNR -----------------------------------------------------------
@@ -107,7 +107,7 @@ try {
     if (-not (Test-Path $regPath)) { New-Item -Path $regPath -Force | Out-Null }
     New-ItemProperty -Path $regPath -Name "EnableMulticast" -Value 0 `
         -PropertyType DWORD -Force | Out-Null
-    Write-Host "✔️ LLMNR disabled."
+    Write-Host "[OK] LLMNR disabled."
 } catch { Write-Warning "LLMNR disable failed: $_" }
 
 # --- Disable Windows Defender -----------------------------------------------
@@ -128,19 +128,19 @@ try {
             Write-Warning "Set-MpPreference $key skipped: $_"
         }
     }
-    Write-Host "✔️ Windows Defender disabled."
+    Write-Host "[OK] Windows Defender disabled."
 } catch {
     Write-Warning "Defender disable via registry failed: $_"
     try {
         Stop-Service -Name WinDefend -Force -ErrorAction Stop
-        Write-Host "✔️ WinDefend service stopped as fallback."
+        Write-Host "[OK] WinDefend service stopped as fallback."
     } catch { Write-Warning "WinDefend stop failed: $_" }
 }
 
 # --- Disable Firewall --------------------------------------------------------
 try {
     Set-NetFirewallProfile -Profile Domain,Private,Public -Enabled False -ErrorAction Stop
-    Write-Host "✔️ Firewall disabled on all profiles."
+    Write-Host "[OK] Firewall disabled on all profiles."
 } catch { Write-Warning "Firewall disable failed: $_" }
 
 # --- Disable Microsoft Store -------------------------------------------------
@@ -149,7 +149,7 @@ try {
     if (-not (Test-Path $storePath)) { New-Item -Path $storePath -Force | Out-Null }
     New-ItemProperty -Path $storePath -Name "RemoveWindowsStore" -Value 1 `
         -PropertyType DWORD -Force | Out-Null
-    Write-Host "✔️ Microsoft Store disabled."
+    Write-Host "[OK] Microsoft Store disabled."
 } catch { Write-Warning "Microsoft Store disable failed: $_" }
 
 # --- Sysmon ------------------------------------------------------------------
@@ -175,7 +175,7 @@ try {
         -ArgumentList "-accepteula -i `"$sysmonCfg`"" `
         -Verb RunAs -Wait -ErrorAction Stop
     $sysmonInstallOk = $true
-    Write-Host "✔️ Sysmon installed."
+    Write-Host "[OK] Sysmon installed."
 } catch { Write-Warning "Sysmon install failed: $_" }
 
 # --- Python 3.10.11 (32-bit) + Pillow ----------------------------------------
@@ -188,7 +188,7 @@ $pyUrl       = "https://www.python.org/ftp/python/3.10.11/python-3.10.11.exe"
 
 try {
     if (Test-Path $pythonExe) {
-        Write-Host "Python already present at $pythonExe — skipping install."
+        Write-Host "Python already present at $pythonExe - skipping install."
     } else {
         Write-Host "Downloading Python 3.10.11 (32-bit)..."
         Invoke-WebRequest -Uri $pyUrl -OutFile $pyInstaller -UseBasicParsing -ErrorAction Stop
@@ -205,11 +205,11 @@ try {
     }
 
     $pyVer = & $pythonExe --version 2>&1
-    Write-Host "✔️ Python detected: $pyVer"
+    Write-Host "[OK] Python detected: $pyVer"
 
     Write-Host "Installing Pillow..."
     & $pipExe install --quiet --disable-pip-version-update Pillow
-    Write-Host "✔️ Pillow installed."
+    Write-Host "[OK] Pillow installed."
 } catch {
     Write-Error "Python/Pillow install failed: $_"
     exit 1
@@ -235,7 +235,7 @@ try {
         -Description "CAPE Sandbox analysis agent"
 
     Register-ScheduledTask -TaskName $taskName -InputObject $task -Force -ErrorAction Stop | Out-Null
-    Write-Host "✔️ CAPE agent scheduled task '$taskName' registered."
+    Write-Host "[OK] CAPE agent scheduled task '$taskName' registered."
 } catch { Write-Warning "CAPE agent setup failed: $_" }
 
 # --- summary -----------------------------------------------------------------
