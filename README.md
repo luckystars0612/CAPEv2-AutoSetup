@@ -44,6 +44,7 @@ Windows guest.
 | `cape_config.py` | Patches CAPEv2 configs in `/opt/CAPEv2/conf` from `sandbox.conf`. |
 | `predefined_configs/` | Templates copied to `/opt/CAPEv2/conf/`. |
 | `sandbox_config.ps1` | Runs on the Windows VM. Disables protections, installs Python + agent. |
+| `guest_runtimes.ps1` | Runs on the Windows VM. Installs .NET / VC++ / Java / Node / apps / browsers to mimic a real user workstation. |
 
 ## Step 1 — configure `sandbox.conf`
 
@@ -140,14 +141,61 @@ The script (with IPs already patched by `cape_config.py`):
 > to inject into them, and a 32-bit agent can only inject into 32-bit
 > processes.
 
-## Step 5 — take the snapshot
+## Step 5 — install user runtimes & apps with `guest_runtimes.ps1`
+
+Malware analysis is more realistic (and signatures fire more often) when
+the guest looks like a normal workstation. Copy
+[`guest_runtimes.ps1`](guest_runtimes.ps1) into the VM and run it as
+Administrator:
+
+```powershell
+.\guest_runtimes.ps1
+```
+
+By default it installs (in order):
+
+1. **.NET Framework 4.8** (offline installer — modifies the OS, reboot
+   recommended afterwards)
+2. **.NET 8 Desktop + Runtime** (x86 + x64) — single LTS version, no ASP.NET
+3. **Visual C++ 2015-2022 Redistributable** (x86 + x64, critical for
+   most native PE files)
+4. **Java JRE 21** (Adoptium Temurin, single LTS version)
+5. **Node.js LTS** (via winget)
+6. **WPS Office** (free) — for inspecting Office documents in sandboxes
+   that can't afford a real Microsoft Office licence
+7. **Apps** (via winget): 7-Zip, Notepad++, VLC, SumatraPDF
+8. **Browsers** (via winget): Chrome, Firefox
+
+Each section is wrapped in its own `try/catch` — one bad installer won't
+abort the rest. The script logs everything to
+`C:\GuestRuntimesSetup.log` and prints a final summary of what
+succeeded / failed.
+
+To skip a section, flip its flag in the `$Config` block at the top:
+
+```powershell
+$Config.InstallJava     = $false   # don't install Java
+$Config.InstallBrowsers = $false   # don't install Chrome / Firefox
+$Config.InstallWPS      = $false   # don't install WPS Office
+$Config.DotNetVersion   = "9.0"    # switch to .NET 9 if you prefer
+$Config.JavaVersion     = 17       # or 8 / 17 / 21
+```
+
+**First-run dance**: after the script finishes, open every installed app
+once (especially the browsers, 7-Zip and WPS Office) so they lay down
+their first-run registry / profile state and register themselves as the
+default handler for `.doc`, `.xls`, `.ppt` etc. Log into any accounts you
+want cached. The agent will then have a fully-populated user environment
+to observe.
+
+## Step 6 — take the snapshot
 
 After the VM reboots and the agent is running, shut it down and take a
 **snapshot in virt-manager** whose name matches the `snapshot` field in
 `sandbox.conf` (default: `clean_state`). CAPE will revert to this snapshot
 before every analysis.
 
-## Step 6 — submit a sample
+## Step 7 — submit a sample
 
 The CAPE web UI is at:
 
