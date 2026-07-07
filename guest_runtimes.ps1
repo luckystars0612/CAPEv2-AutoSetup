@@ -49,7 +49,10 @@ $ErrorActionPreference = "Continue"
 # =============================================================================
 # Logging
 # =============================================================================
-New-Item -ItemType Directory -Force -Path (Split-Path $Config.LogFile) | Out-Null
+$logDir = Split-Path $Config.LogFile -Parent
+if ($logDir -and -not (Test-Path $logDir)) {
+    New-Item -ItemType Directory -Force -Path $logDir | Out-Null
+}
 try {
     Start-Transcript -Path $Config.LogFile -Append -ErrorAction Stop
 } catch {

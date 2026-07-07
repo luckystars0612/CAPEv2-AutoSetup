@@ -35,13 +35,13 @@ try {
 }
 
 # --- IPs patched by cape_config.py ------------------------------------------
-$sandbox_ip = "x.x.x.x"   # patched from sandbox.conf:sandbox_ip
-$cape_ip    = "x.x.x.x"   # patched from sandbox.conf:resultserver_ip
+$sandbox_ip = "192.168.121.50"   # patched from sandbox.conf:sandbox_ip
+$cape_ip    = "192.168.121.1"   # patched from sandbox.conf:resultserver_ip
 
 # --- helper ------------------------------------------------------------------
 function Test-IpPatched {
     param([string]$Value, [string]$Name)
-    if ($Value -eq "x.x.x.x" -or [string]::IsNullOrWhiteSpace($Value)) {
+    if ($Value -eq "192.168.121.50" -or [string]::IsNullOrWhiteSpace($Value)) {
         Write-Error "$Name was not patched from sandbox.conf (still '$Value'). Re-run cape_config.py."
         exit 1
     }
