@@ -50,13 +50,23 @@ $agentDest  = "C:\cape_agent.pyw"
 $pythonDir  = "C:\Python310"
 $pythonExe  = "$pythonDir\python.exe"
 $pythonwExe = "$pythonDir\pythonw.exe"
-$pipExe     = "$pythonDir\Scripts\pip.exe"
+$pipArgs    = @("-m","pip")   # call pip via 'python -m pip' (pip.exe may not exist yet)
 $winlogon   = "HKLM:\SOFTWARE\Microsoft\Windows NT\CurrentVersion\Winlogon"
 
 function Set-Reg {
     param($Path, $Name, $Value, $Type = "DWord")
     if (-not (Test-Path $Path)) { New-Item -Path $Path -Force | Out-Null }
     New-ItemProperty -Path $Path -Name $Name -Value $Value -PropertyType $Type -Force | Out-Null
+}
+
+function Get-UrlWithRetry {
+    # Retries transient failures (e.g. GitHub HTTP 429 Too Many Requests) with backoff.
+    param([string]$Url, [string]$Out, [int]$Tries = 4)
+    for ($i = 1; $i -le $Tries; $i++) {
+        try { Invoke-WebRequest $Url -OutFile $Out -UseBasicParsing -ErrorAction Stop; return $true }
+        catch { Write-Warning "download $i/$Tries failed ($Url): $_"; if ($i -lt $Tries) { Start-Sleep -Seconds (5 * $i) } }
+    }
+    return $false
 }
 
 # =============================================================================
@@ -157,8 +167,8 @@ if ($Uninstall) { Invoke-Uninstall; try { Stop-Transcript | Out-Null } catch {};
 # =============================================================================
 
 # --- IPs patched by cape_config.py ------------------------------------------
-$sandbox_ip = "192.168.122.50" # patched from sandbox.conf:sandbox_ip
-$cape_ip = "192.168.122.1" # patched from sandbox.conf:resultserver_ip
+$sandbox_ip = "192.168.121.50" # patched from sandbox.conf:sandbox_ip
+$cape_ip = "192.168.121.1" # patched from sandbox.conf:resultserver_ip
 
 function Test-IpPatched {
     param([string]$Value, [string]$Name)
@@ -248,41 +258,81 @@ $sysmonInstallOk = $false
 try {
     $z="$env:TEMP\Sysmon.zip"; $d="$env:TEMP\Sysmon"; $cfg="$d\sysmonconfig.xml"
     $exe = if ([Environment]::Is64BitOperatingSystem) { "Sysmon64.exe" } else { "Sysmon.exe" }
-    Invoke-WebRequest "https://download.sysinternals.com/files/Sysmon.zip" -OutFile $z -UseBasicParsing -ErrorAction Stop
+    if (-not (Get-UrlWithRetry "https://download.sysinternals.com/files/Sysmon.zip" $z)) { throw "Sysmon.zip download failed." }
     if (Test-Path $d) { Remove-Item -Recurse -Force $d }
     Expand-Archive $z -DestinationPath $d -Force -ErrorAction Stop
-    Invoke-WebRequest "https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-config/master/sysmonconfig-export.xml" -OutFile $cfg -UseBasicParsing -ErrorAction Stop
-    Start-Process "$d\$exe" -ArgumentList "-accepteula -i `"$cfg`"" -Verb RunAs -Wait -ErrorAction Stop
-    $sysmonInstallOk = $true; Write-Host "[OK] Sysmon installed."
+
+    # SwiftOnSecurity config is on GitHub and gets 429-rate-limited; retry, then
+    # fall back to Sysmon's built-in default config so install still succeeds.
+    $haveCfg = Get-UrlWithRetry "https://raw.githubusercontent.com/SwiftOnSecurity/sysmon-config/master/sysmonconfig-export.xml" $cfg
+    if ($haveCfg) {
+        Start-Process "$d\$exe" -ArgumentList "-accepteula -i `"$cfg`"" -Verb RunAs -Wait -ErrorAction Stop
+        Write-Host "[OK] Sysmon installed with SwiftOnSecurity config."
+    } else {
+        Write-Warning "Config download rate-limited (429). Installing Sysmon with default config."
+        Start-Process "$d\$exe" -ArgumentList "-accepteula -i" -Verb RunAs -Wait -ErrorAction Stop
+        Write-Host "[OK] Sysmon installed (default config; re-apply Swift config later if wanted)."
+    }
+    $sysmonInstallOk = $true
 } catch { Write-Warning "Sysmon: $_" }
+
 
 # --- Python 3.10.11 (32-bit) + Pillow ---------------------------------------
 try {
     if (Test-Path $pythonExe) { Write-Host "Python already at $pythonExe." }
     else {
-        $inst="$env:TEMP\python-3.10.11.exe"
-        $pyArgs = "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 TargetDir=$pythonDir"
+        $inst  = "$env:TEMP\python-3.10.11.exe"
+        $logf  = "C:\python_install.log"
+        $pyArgs = "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 TargetDir=$pythonDir /log `"$logf`""
+
+        # A pending reboot makes the Python MSI fail with 1603. Catch it early.
+        $pending = (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Component Based Servicing\RebootPending") -or
+                   (Test-Path "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\WindowsUpdate\Auto Update\RebootRequired") -or
+                   [bool](Get-ItemProperty "HKLM:\SYSTEM\CurrentControlSet\Control\Session Manager" -Name PendingFileRenameOperations -ErrorAction SilentlyContinue)
+        if ($pending) { Write-Warning "A reboot is PENDING - Python install will likely 1603. Reboot, then re-run." }
+
         Invoke-WebRequest "https://www.python.org/ftp/python/3.10.11/python-3.10.11.exe" -OutFile $inst -UseBasicParsing -ErrorAction Stop
-        Write-Host "Installing Python..."
+        Write-Host "Installing Python (log -> $logf)..."
         $p = Start-Process $inst -ArgumentList $pyArgs -Wait -PassThru
         Write-Host "Installer exit code: $($p.ExitCode)"
-        # A stale registration from a previous (e.g. -Purge'd) install makes the
-        # /quiet installer no-op instead of writing files. Clear it and retry.
+
+        # Exit 1603 / no files => orphaned registration from a previous install or
+        # -Purge. Tear the registration down at the package level, then reinstall.
         if (-not (Test-Path $pythonExe)) {
-            Write-Warning "python.exe not found - clearing prior registration and retrying."
-            Start-Process $inst -ArgumentList "/uninstall /quiet" -Wait
+            Write-Warning "python.exe not found (exit $($p.ExitCode)) - removing orphaned registration and retrying."
+            try {
+                Get-Package -Name "Python 3.10*" -ErrorAction SilentlyContinue | ForEach-Object {
+                    Write-Host "Uninstalling package: $($_.Name)"
+                    Uninstall-Package -Name $_.Name -Force -ErrorAction SilentlyContinue | Out-Null
+                }
+            } catch { Write-Warning "package uninstall skipped: $_" }
+            Start-Process $inst -ArgumentList "/uninstall /quiet" -Wait | Out-Null
             $p = Start-Process $inst -ArgumentList $pyArgs -Wait -PassThru
             Write-Host "Reinstall exit code: $($p.ExitCode)"
         }
         Remove-Item $inst -Force -ErrorAction SilentlyContinue
+
         if (-not (Test-Path $pythonExe)) {
-            throw "python.exe still missing at $pythonExe (installer exit $($p.ExitCode)). Reboot once and re-run - a pending Python MSI operation may need clearing first."
+            $tail = if (Test-Path $logf) { (Get-Content $logf -Tail 12 -ErrorAction SilentlyContinue) -join "`n" } else { "(no install log produced)" }
+            throw @"
+Python still missing at $pythonExe (installer exit $($p.ExitCode); 1603 = fatal MSI error).
+This VM has a wedged Python 3.10.11 MSI state. Clear it manually, then re-run:
+  1) Reboot the VM (clears pending MSI / file-rename operations).
+  2) Settings > Apps > Installed apps > uninstall any 'Python 3.10.11' entries.
+     If uninstall errors, run Microsoft's 'Program Install and Uninstall
+     troubleshooter' (MicrosoftProgram_Install_and_Uninstall.meta.diagcab).
+  3) Confirm C:\Python310 is gone, then re-run .\sandbox_config.ps1
+Last lines of ${logf}:
+$tail
+"@
         }
     }
     Write-Host "[OK] $(& $pythonExe --version 2>&1)"
     # FIX: real flag is --disable-pip-version-check (old script used a nonexistent
     # flag, so pip errored and Pillow never installed -> 'No module named PIL').
-    & $pipExe install --quiet --disable-pip-version-check Pillow
+    # Use 'python -m pip' - the Scripts\pip.exe shim may not exist yet.
+    & $pythonExe -m ensurepip --upgrade 2>$null
+    & $pythonExe -m pip install --quiet --disable-pip-version-check Pillow
     & $pythonExe -c "import PIL; print('[OK] Pillow', PIL.__version__)"
     if ($LASTEXITCODE -ne 0) { throw "Pillow import check failed." }
 } catch { Write-Error "Python/Pillow: $_"; exit 1 }
