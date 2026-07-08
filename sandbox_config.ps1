@@ -9,7 +9,7 @@
 # Install mode does:
 #   1. Static IP on the first non-virtual "Up" adapter.
 #   2. Disable Teredo, LLMNR, Defender (policy), Firewall, Store, UAC.
-#   3. Guest-state hardening: Windows Update off, SmartScreen off, WER off,
+#   3. Guest-state hardening: SmartScreen off, WER off,
 #      auto-reboot/maintenance off, power plan never-sleep, Edge first-run off.
 #   4. Sysmon (SwiftOnSecurity config).
 #   5. Python 3.10.11 (32-bit) to C:\Python310 + Pillow (verified).
@@ -197,9 +197,10 @@ try {
     $defPath = "HKLM:\Software\Policies\Microsoft\Windows Defender"
     Set-Reg $defPath "DisableAntiSpyware" 1
     Set-Reg "$defPath\Real-Time Protection" "DisableRealtimeMonitoring" 1
-    foreach ($k in @("DisableRealtimeMonitoring","DisableBehaviorMonitoring")) {
-        try { Set-MpPreference -Name $k -Value $true -ErrorAction Stop } catch { Write-Warning "Set-MpPreference $k skipped (Tamper Protection?): $_" }
-    }
+    try { Set-MpPreference -DisableRealtimeMonitoring $true -ErrorAction Stop }
+    catch { Write-Warning "DisableRealtimeMonitoring skipped (Tamper Protection still on?): $_" }
+    try { Set-MpPreference -DisableBehaviorMonitoring $true -ErrorAction Stop }
+    catch { Write-Warning "DisableBehaviorMonitoring skipped (Tamper Protection still on?): $_" }
     Write-Host "[OK] Defender policy disables applied."
 } catch { Write-Warning "Defender: $_" }
 
@@ -213,17 +214,7 @@ try {
 } catch { Write-Warning "UAC: $_" }
 
 # --- guest-state hardening ---------------------------------------------------
-try {
-    Set-Reg "HKLM:\SOFTWARE\Policies\Microsoft\Windows\WindowsUpdate\AU" "NoAutoUpdate" 1
-    foreach ($svc in "wuauserv","UsoSvc","WaaSMedicSvc") {
-        if (Get-Service $svc -ErrorAction SilentlyContinue) {
-            Stop-Service $svc -Force -ErrorAction SilentlyContinue
-            Set-Service  $svc -StartupType Disabled -ErrorAction SilentlyContinue
-        }
-    }
-    Write-Host "[OK] Windows Update disabled."
-} catch { Write-Warning "WU: $_" }
-
+# (Windows Update intentionally left ENABLED per preference.)
 try {
     Set-Reg "HKLM:\SOFTWARE\Policies\Microsoft\Windows\System" "EnableSmartScreen" 0
     Set-Reg "HKLM:\SOFTWARE\Microsoft\Windows\CurrentVersion\Explorer" "SmartScreenEnabled" "Off" "String"
@@ -270,10 +261,23 @@ try {
     if (Test-Path $pythonExe) { Write-Host "Python already at $pythonExe." }
     else {
         $inst="$env:TEMP\python-3.10.11.exe"
+        $pyArgs = "/quiet InstallAllUsers=1 PrependPath=1 Include_pip=1 TargetDir=$pythonDir"
         Invoke-WebRequest "https://www.python.org/ftp/python/3.10.11/python-3.10.11.exe" -OutFile $inst -UseBasicParsing -ErrorAction Stop
-        Start-Process $inst -ArgumentList "/quiet InstallAllUsers=1 PrependPath=1 TargetDir=$pythonDir Include_pip=1" -Wait -ErrorAction Stop
+        Write-Host "Installing Python..."
+        $p = Start-Process $inst -ArgumentList $pyArgs -Wait -PassThru
+        Write-Host "Installer exit code: $($p.ExitCode)"
+        # A stale registration from a previous (e.g. -Purge'd) install makes the
+        # /quiet installer no-op instead of writing files. Clear it and retry.
+        if (-not (Test-Path $pythonExe)) {
+            Write-Warning "python.exe not found - clearing prior registration and retrying."
+            Start-Process $inst -ArgumentList "/uninstall /quiet" -Wait
+            $p = Start-Process $inst -ArgumentList $pyArgs -Wait -PassThru
+            Write-Host "Reinstall exit code: $($p.ExitCode)"
+        }
         Remove-Item $inst -Force -ErrorAction SilentlyContinue
-        if (-not (Test-Path $pythonExe)) { throw "python.exe missing after install." }
+        if (-not (Test-Path $pythonExe)) {
+            throw "python.exe still missing at $pythonExe (installer exit $($p.ExitCode)). Reboot once and re-run - a pending Python MSI operation may need clearing first."
+        }
     }
     Write-Host "[OK] $(& $pythonExe --version 2>&1)"
     # FIX: real flag is --disable-pip-version-check (old script used a nonexistent
