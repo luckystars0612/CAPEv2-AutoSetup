@@ -24,6 +24,25 @@ function Info { param($m) Write-Host "[*] $m" -ForegroundColor Cyan }
 function OK   { param($m) Write-Host "[OK] $m" -ForegroundColor Green }
 function Warn { param($m) Write-Host "[!] $m" -ForegroundColor Yellow }
 
+# A partial install leaves python.exe present but unable to import its stdlib
+# ("No module named 'encodings'"), so Test-Path is not enough - actually run it.
+function Test-PyWorks {
+    param($exe)
+    if (-not (Test-Path $exe)) { return $false }
+    try { & $exe -c "import encodings, os, zlib; print('pyok')" 2>$null | Out-Null; return ($LASTEXITCODE -eq 0) }
+    catch { return $false }
+}
+
+# Stale PYTHONHOME/PYTHONPATH make the interpreter resolve relative sys.path and
+# fail to find its stdlib. Clear them at every scope + the current process.
+function Clear-PyEnv {
+    foreach ($sc in "Machine","User") {
+        [Environment]::SetEnvironmentVariable("PYTHONHOME",$null,$sc)
+        [Environment]::SetEnvironmentVariable("PYTHONPATH",$null,$sc)
+    }
+    $env:PYTHONHOME = $null; $env:PYTHONPATH = $null
+}
+
 Info "Cleaning Python installs matching '*$Match*'."
 
 # --- 0. Make sure the Installer + VSS services can run -----------------------
@@ -120,6 +139,10 @@ foreach ($k in @(
 }
 OK "Registration cleanup done ($removed key group(s) removed)."
 
+# 3d. Clear stale PYTHONHOME / PYTHONPATH (a cause of the 'encodings' failure)
+Clear-PyEnv
+OK "Cleared any PYTHONHOME / PYTHONPATH environment variables."
+
 # --- 4. Remove leftover files: install dirs + Package Cache bundles ----------
 $dirs = @(
     $TargetDir,
@@ -165,23 +188,56 @@ if ($Reinstall) {
         exit 0
     }
     Info "Installing Python 3.10.11 (32-bit) to $TargetDir ..."
-    $inst = "$env:TEMP\python-3.10.11.exe"; $logf = "C:\python_install.log"
+    Clear-PyEnv
+    $inst = "$env:TEMP\python-3.10.11.exe"
+    $common = "MSIFASTINSTALL=7 InstallAllUsers=1 PrependPath=1 Include_pip=1 Include_test=0 TargetDir=$TargetDir"
+    $pyexe = "$TargetDir\python.exe"
     try {
         Invoke-WebRequest "https://www.python.org/ftp/python/3.10.11/python-3.10.11.exe" -OutFile $inst -UseBasicParsing -ErrorAction Stop
-        $args = "/quiet MSIFASTINSTALL=7 InstallAllUsers=1 PrependPath=1 Include_pip=1 TargetDir=$TargetDir /log `"$logf`""
-        $p = Start-Process $inst -ArgumentList $args -Wait -PassThru
-        Info "Installer exit code: $($p.ExitCode)"
-        Remove-Item $inst -Force -ErrorAction SilentlyContinue
-        if (-not (Test-Path "$TargetDir\python.exe")) {
-            $tail = if (Test-Path $logf) { (Get-Content $logf -Tail 12) -join "`n" } else { "(no log)" }
-            throw "python.exe missing (exit $($p.ExitCode)). Log tail:`n$tail"
+
+        # Attempt 1: normal quiet install.
+        Info "Install pass 1 (quiet)..."
+        $p = Start-Process $inst -ArgumentList "/quiet $common /log C:\python_install.log" -Wait -PassThru
+        Info "exit code: $($p.ExitCode)"
+
+        # Attempt 2: if the interpreter can't load its stdlib, leftover component
+        # registration made the installer SKIP files. /repair rewrites them all.
+        if (-not (Test-PyWorks $pyexe)) {
+            Warn "Interpreter incomplete (stdlib not loading). Forcing /repair..."
+            $p = Start-Process $inst -ArgumentList "/quiet /repair $common /log C:\python_repair.log" -Wait -PassThru
+            Info "repair exit code: $($p.ExitCode)"
         }
-        OK "$(& "$TargetDir\python.exe" --version 2>&1)"
-        & "$TargetDir\python.exe" -m ensurepip --upgrade 2>$null
-        & "$TargetDir\python.exe" -m pip install --disable-pip-version-check Pillow
-        & "$TargetDir\python.exe" -c "import PIL; print('[OK] Pillow', PIL.__version__)"
-        OK "Python + Pillow installed. Now re-run .\sandbox_config.ps1"
-    } catch { Warn "Reinstall failed: $_"; Warn "Reboot and retry:  .\clean_python.ps1 -Reinstall" }
+
+        # Attempt 3: last resort - wipe folder + registration, then install fresh.
+        if (-not (Test-PyWorks $pyexe)) {
+            Warn "Still broken - wiping and doing a from-scratch install..."
+            Start-Process $inst -ArgumentList "/uninstall /quiet" -Wait | Out-Null
+            Remove-Item $TargetDir -Recurse -Force -ErrorAction SilentlyContinue
+            $p = Start-Process $inst -ArgumentList "/quiet $common /log C:\python_install2.log" -Wait -PassThru
+            Info "final exit code: $($p.ExitCode)"
+        }
+        Remove-Item $inst -Force -ErrorAction SilentlyContinue
+
+        if (-not (Test-PyWorks $pyexe)) {
+            $log = @("C:\python_repair.log","C:\python_install.log") | Where-Object { Test-Path $_ } | Select-Object -First 1
+            $tail = if ($log) { (Get-Content $log -Tail 12) -join "`n" } else { "(no log)" }
+            throw @"
+Interpreter still can't load its stdlib after 3 attempts.
+This guest's Windows Installer state is damaged beyond a scripted fix.
+Recommended: revert the VM to a clean snapshot and run sandbox_config.ps1 once
+(never -Purge). If no snapshot exists, repair Windows: 'sfc /scannow' then
+'DISM /Online /Cleanup-Image /RestoreHealth', reboot, and retry.
+Log tail ($log):
+$tail
+"@
+        }
+
+        OK "Interpreter healthy: $(& $pyexe --version 2>&1)"
+        & $pyexe -m ensurepip --upgrade 2>$null | Out-Null
+        & $pyexe -m pip install --disable-pip-version-check Pillow
+        & $pyexe -c "import PIL; print('[OK] Pillow', PIL.__version__)"
+        OK "Python + Pillow installed and verified. Now re-run .\sandbox_config.ps1"
+    } catch { Warn "Reinstall failed: $_" }
 } else {
     Write-Host ""
     Info "Clean-only done. To install now:  .\clean_python.ps1 -Reinstall"
